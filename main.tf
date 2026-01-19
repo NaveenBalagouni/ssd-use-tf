@@ -15,6 +15,9 @@ terraform {
   }
 }
 
+# -----------------------------
+# Providers
+# -----------------------------
 provider "kubernetes" {
   config_path = var.kubeconfig_path != "" ? var.kubeconfig_path : null
 }
@@ -25,7 +28,11 @@ provider "helm" {
   }
 }
 
-# Step 1: Create namespace
+# -----------------------------
+# Step 1: Namespace (managed once)
+# IMPORTANT: Import if already exists
+# terraform import kubernetes_namespace.opmsx_ns ssd-opsmx-tf
+# -----------------------------
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
@@ -37,12 +44,8 @@ resource "kubernetes_namespace" "opmsx_ns" {
   }
 }
 
-
-
-
-
 # -----------------------------
-# Step 1: Clone Helm Chart Repo
+# Step 2: Clone SSD Helm Chart
 # -----------------------------
 resource "null_resource" "clone_ssd_chart" {
   triggers = {
@@ -60,7 +63,7 @@ resource "null_resource" "clone_ssd_chart" {
 }
 
 # -----------------------------
-# Step 2: Read values.yaml
+# Step 3: Load Helm values.yaml
 # -----------------------------
 data "local_file" "ssd_values" {
   filename   = "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
@@ -68,19 +71,21 @@ data "local_file" "ssd_values" {
 }
 
 # -----------------------------
-# Step 3: Deploy SSD Helm Releases
+# Step 4: Deploy / Upgrade SSD (SINGLE release)
 # -----------------------------
 resource "helm_release" "opsmx_ssd" {
-  for_each = toset(var.ingress_hosts)
+  depends_on = [
+    kubernetes_namespace.opmsx_ns,
+    null_resource.clone_ssd_chart
+  ]
 
-  depends_on = [null_resource.clone_ssd_chart]
-
-  name      = "ssd-terraform"
+  name      = "ssd"
   namespace = var.namespace
   chart     = "/tmp/enterprise-ssd/charts/ssd"
   values    = [data.local_file.ssd_values.content]
-  version   = "2025.01.00"
-  
+
+  # SSD VERSION (change this to upgrade/downgrade)
+  version = var.ssd_version
 
   set {
     name  = "ingress.enabled"
@@ -88,13 +93,13 @@ resource "helm_release" "opsmx_ssd" {
   }
 
   set {
-    name  = "global.certManager.installed"
-    value = true
+    name  = "global.ssdUI.host"
+    value = join(",", var.ingress_hosts)
   }
 
   set {
-    name  = "global.ssdUI.host"
-    value = join(",", var.ingress_hosts) 
+    name  = "global.certManager.installed"
+    value = true
   }
 
   create_namespace = false
@@ -102,15 +107,16 @@ resource "helm_release" "opsmx_ssd" {
   recreate_pods    = true
   cleanup_on_fail  = true
   wait             = true
+  timeout          = 900
 
   lifecycle {
     replace_triggered_by = [null_resource.clone_ssd_chart]
   }
 }
 
-
 # -----------------------------
-# Step 5: Apply Job YAML (ServiceAccount + Role + RoleBinding + Job)
+# Step 5: Apply Job YAML
+# (ServiceAccount + Role + RoleBinding + Job)
 # -----------------------------
 data "template_file" "job_yaml" {
   template = file("${path.module}/job.yaml")
@@ -121,9 +127,12 @@ data "template_file" "job_yaml" {
 
 resource "null_resource" "apply_job_yaml" {
   depends_on = [
-    kubernetes_namespace.opmsx_ns,
     helm_release.opsmx_ssd
   ]
+
+  triggers = {
+    job_sha = filesha256("${path.module}/job.yaml")
+  }
 
   provisioner "local-exec" {
     command = "echo '${data.template_file.job_yaml.rendered}' | kubectl apply -f -"
