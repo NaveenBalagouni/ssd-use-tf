@@ -12,17 +12,19 @@ terraform {
   }
 }
 
-provider "kubernetes" {
-  config_path = var.kubeconfig_path != "" ? var.kubeconfig_path : null
-}
+# 1. Clone Chart Logic (Moved back to Terraform but isolated)
+resource "terraform_data" "clone_ssd" {
+  triggers_replace = [var.git_branch]
 
-provider "helm" {
-  kubernetes {
-    config_path = var.kubeconfig_path != "" ? var.kubeconfig_path : null
+  provisioner "local-exec" {
+    command = <<EOT
+      rm -rf /tmp/enterprise-ssd
+      git clone --branch ${var.git_branch} ${var.git_repo_url} /tmp/enterprise-ssd
+    EOT
   }
 }
 
-# 1. Namespace
+# 2. Namespace (Import if already exists)
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
@@ -32,17 +34,19 @@ resource "kubernetes_namespace" "opmsx_ns" {
   }
 }
 
-# 2. Deploy / Upgrade SSD
+# 3. Deploy / Upgrade SSD
 resource "helm_release" "opsmx_ssd" {
-  depends_on = [kubernetes_namespace.opmsx_ns]
+  # This dependency is critical: Helm won't start until cloning is done
+  depends_on = [terraform_data.clone_ssd, kubernetes_namespace.opmsx_ns]
 
   name       = "ssd"
   namespace  = var.namespace
   chart      = "/tmp/enterprise-ssd/charts/ssd"
 
-  # Safely read the file because our script ensures it exists beforehand
+  # FIX: We pass the PATH as a string, not the file() function.
+  # The Helm provider will read the file during the Apply phase.
   values = [
-    file("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml")
+    "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
   ]
 
   version          = var.ssd_version
@@ -67,7 +71,7 @@ resource "helm_release" "opsmx_ssd" {
   }
 }
 
-# 3. Apply Job YAML
+# 4. Apply Job YAML
 resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
   
