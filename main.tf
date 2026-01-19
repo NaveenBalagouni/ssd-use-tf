@@ -110,22 +110,22 @@ resource "helm_release" "opsmx_ssd" {
 
 
 # -----------------------------
-# Step 5: Apply Job YAML (includes SA, Role, RoleBinding, Job)
+# Step 5: Apply Job YAML (ServiceAccount + Role + RoleBinding + Job)
 # -----------------------------
-data "local_file" "job_yaml" {
-  filename = "${path.module}/job.yaml"
-
-  depends_on = [
-    kubernetes_namespace.opmsx_ns,
-    helm_release.opsmx_ssd
-  ]
+data "template_file" "job_yaml" {
+  template = file("${path.module}/job.yaml")
+  vars = {
+    namespace = var.namespace
+  }
 }
 
-resource "kubernetes_manifest" "job_resources" {
-  manifest = yamldecode(data.local_file.job_yaml.content)
-
+resource "null_resource" "apply_job_yaml" {
   depends_on = [
     kubernetes_namespace.opmsx_ns,
     helm_release.opsmx_ssd
   ]
+
+  provisioner "local-exec" {
+    command = "echo '${data.template_file.job_yaml.rendered}' | kubectl apply -f -"
+  }
 }
