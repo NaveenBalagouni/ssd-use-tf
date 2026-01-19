@@ -79,7 +79,7 @@ resource "helm_release" "opsmx_ssd" {
   namespace = var.namespace
   chart     = "/tmp/enterprise-ssd/charts/ssd"
   values    = [data.local_file.ssd_values.content]
-  version   = var.git_branch
+  version   = "2025-05"
   
 
   set {
