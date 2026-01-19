@@ -12,9 +12,6 @@ terraform {
   }
 }
 
-# -----------------------------
-# Providers
-# -----------------------------
 provider "kubernetes" {
   config_path = var.kubeconfig_path != "" ? var.kubeconfig_path : null
 }
@@ -25,9 +22,7 @@ provider "helm" {
   }
 }
 
-# -----------------------------
 # 1. Namespace
-# -----------------------------
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
@@ -37,14 +32,12 @@ resource "kubernetes_namespace" "opmsx_ns" {
   }
 }
 
-# -----------------------------
 # 2. Clone SSD Helm Chart
-# -----------------------------
 resource "terraform_data" "clone_ssd_chart" {
-  input = {
-    repo   = var.git_repo_url
-    branch = var.git_branch
-  }
+  triggers_replace = [
+    var.git_repo_url,
+    var.git_branch
+  ]
 
   provisioner "local-exec" {
     command = <<EOT
@@ -54,21 +47,22 @@ resource "terraform_data" "clone_ssd_chart" {
   }
 }
 
-# -----------------------------
 # 3. Deploy / Upgrade SSD
-# -----------------------------
 resource "helm_release" "opsmx_ssd" {
-  # This tells Terraform: Do not even look at this resource until the clone is done
+  # Explicitly wait for the clone to finish
   depends_on = [terraform_data.clone_ssd_chart, kubernetes_namespace.opmsx_ns]
 
   name       = "ssd"
   namespace  = var.namespace
+  
+  # We use the absolute path string. 
+  # Helm will look for this folder only when it starts the installation.
   chart      = "/tmp/enterprise-ssd/charts/ssd"
   
-  # By using 'templatefile' inside the list, and since it depends on the clone,
-  # we avoid the "inconsistent plan" error.
+  # FIX: Pass the path as a string in the list. 
+  # DO NOT use file() or templatefile() here.
   values = [
-    templatefile("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml", {})
+    "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
   ]
 
   version          = var.ssd_version
@@ -95,13 +89,12 @@ resource "helm_release" "opsmx_ssd" {
   }
 }
 
-# -----------------------------
 # 4. Apply Job YAML
-# -----------------------------
 resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
 
   triggers_replace = [
+    # Using path.module ensures this is checked during Plan safely
     filebase64sha256("${path.module}/job.yaml"),
     var.ssd_version
   ]
