@@ -1,4 +1,5 @@
 terraform {
+  required_version = ">= 1.4.0"
   required_providers {
     helm = {
       source  = "hashicorp/helm"
@@ -29,35 +30,32 @@ provider "helm" {
 }
 
 # -----------------------------
-# Step 1: Namespace (managed once)
-# IMPORTANT: Import if already exists
-# terraform import kubernetes_namespace.opmsx_ns ssd-opsmx-tf
+# Step 1: Namespace 
 # -----------------------------
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
   }
 
+  # This prevents Terraform from deleting the namespace if the stack is destroyed
   lifecycle {
     prevent_destroy = true
-    ignore_changes  = all
   }
 }
 
 # -----------------------------
 # Step 2: Clone SSD Helm Chart
 # -----------------------------
-resource "null_resource" "clone_ssd_chart" {
-  triggers = {
-    git_repo   = var.git_repo_url
-    git_branch = var.git_branch
+resource "terraform_data" "clone_ssd_chart" {
+  input = {
+    repo   = var.git_repo_url
+    branch = var.git_branch
   }
 
   provisioner "local-exec" {
     command = <<EOT
       rm -rf /tmp/enterprise-ssd
       git clone --branch ${var.git_branch} ${var.git_repo_url} /tmp/enterprise-ssd
-      ls -l /tmp/enterprise-ssd/charts/ssd
     EOT
   }
 }
@@ -67,25 +65,28 @@ resource "null_resource" "clone_ssd_chart" {
 # -----------------------------
 data "local_file" "ssd_values" {
   filename   = "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
-  depends_on = [null_resource.clone_ssd_chart]
+  depends_on = [terraform_data.clone_ssd_chart]
 }
 
 # -----------------------------
-# Step 4: Deploy / Upgrade SSD (SINGLE release)
+# Step 4: Deploy / Upgrade SSD
 # -----------------------------
 resource "helm_release" "opsmx_ssd" {
-  depends_on = [
-    kubernetes_namespace.opmsx_ns,
-    null_resource.clone_ssd_chart
-  ]
+  name       = "ssd"
+  namespace  = kubernetes_namespace.opmsx_ns.metadata[0].name
+  chart      = "/tmp/enterprise-ssd/charts/ssd"
+  repository = null # Local chart
 
-  name      = "ssd"
-  namespace = var.namespace
-  chart     = "/tmp/enterprise-ssd/charts/ssd"
-  values    = [data.local_file.ssd_values.content]
+  # Use the loaded values file
+  values = [data.local_file.ssd_values.content]
 
-  # SSD VERSION (change this to upgrade/downgrade)
-  version = var.ssd_version
+  version          = var.ssd_version
+  create_namespace = false
+  force_update     = true
+  recreate_pods    = true
+  cleanup_on_fail  = true
+  wait             = true
+  timeout          = 900
 
   set {
     name  = "ingress.enabled"
@@ -99,42 +100,31 @@ resource "helm_release" "opsmx_ssd" {
 
   set {
     name  = "global.certManager.installed"
-    value = true
+    value = "true"
   }
 
-  create_namespace = false
-  force_update     = true
-  recreate_pods    = true
-  cleanup_on_fail  = true
-  wait             = true
-  timeout          = 900
-
-  lifecycle {
-    replace_triggered_by = [null_resource.clone_ssd_chart]
-  }
+  # Ensure the chart is cloned before Helm tries to install it
+  depends_on = [terraform_data.clone_ssd_chart]
 }
 
 # -----------------------------
 # Step 5: Apply Job YAML
-# (ServiceAccount + Role + RoleBinding + Job)
 # -----------------------------
-data "template_file" "job_yaml" {
-  template = file("${path.module}/job.yaml")
-  vars = {
-    namespace = var.namespace
-  }
-}
-
-resource "null_resource" "apply_job_yaml" {
-  depends_on = [
-    helm_release.opsmx_ssd
+resource "terraform_data" "apply_job_yaml" {
+  triggers_replace = [
+    # Re-run if the template file changes
+    hashicls(file("${path.module}/job.yaml")),
+    # Re-run if the Helm release is updated
+    helm_release.opsmx_ssd.version
   ]
 
-  triggers = {
-    job_sha = filesha256("${path.module}/job.yaml")
+  provisioner "local-exec" {
+    command = <<EOT
+      cat <<EOF | kubectl apply -f -
+      ${templatefile("${path.module}/job.yaml", { namespace = var.namespace })}
+      EOF
+    EOT
   }
 
-  provisioner "local-exec" {
-    command = "echo '${data.template_file.job_yaml.rendered}' | kubectl apply -f -"
-  }
+  depends_on = [helm_release.opsmx_ssd]
 }
