@@ -107,3 +107,25 @@ resource "helm_release" "opsmx_ssd" {
     replace_triggered_by = [null_resource.clone_ssd_chart]
   }
 }
+
+
+# -----------------------------
+# Step 5: Apply Job YAML (includes SA, Role, RoleBinding, Job)
+# -----------------------------
+data "local_file" "job_yaml" {
+  filename = "${path.module}/job.yaml"
+
+  depends_on = [
+    kubernetes_namespace.opmsx_ns,
+    helm_release.opsmx_ssd
+  ]
+}
+
+resource "kubernetes_manifest" "job_resources" {
+  manifest = yamldecode(data.local_file.job_yaml.content)
+
+  depends_on = [
+    kubernetes_namespace.opmsx_ns,
+    helm_release.opsmx_ssd
+  ]
+}
