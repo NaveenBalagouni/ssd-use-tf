@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: secrets-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secret-manager
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: secret-manager-binding
+subjects:
+  - kind: ServiceAccount
+    name: secrets-sa
+roleRef:
+  kind: Role
+  name: secret-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: secrets-job
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: secret-creator
+          image: quay.io/opsmxpublic/opsmx-custom-binaries:kubectl-spin-cli-git-bash-jq-yq
+          command:
+            - /bin/bash
+            - -c
+            - |
+              kubectl create secret generic rabbitmq-secret --from-literal=username=rabbitmq --from-literal=password=Networks123 -n "$namespace"
+              kubectl create secret generic redis-secret --from-literal=password=12345sdfaadsd -n "$namespace"
+              kubectl create secret generic temporal-visibility-store --from-literal=username=postgres --from-literal=password=network123 -n "$namespace"
+              kubectl create secret generic temporal-default-store --from-literal=username=postgres --from-literal=password=network123 -n "$namespace"
+              kubectl create secret generic ssdsecret --from-literal=AESEncryptionKey=OKPQK0JWS2TVTW9E86IWWYN3VY4Z34WJ -n "$namespace"
+              kubectl create secret generic db-secret --from-literal=username=postgres --from-literal=password=network123 -n "$namespace"
+              kubectl create secret generic minio-secret --from-literal=username=iJSR1FvadsPdasdjETbli51UY --from-literal=password=oE3F0RYfABir2pfnadjCkrKPI1dd7VOcSonW5nUiZGT -n "$namespace"
+      serviceAccountName: secrets-sa
