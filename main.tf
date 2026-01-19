@@ -69,16 +69,17 @@ data "local_file" "ssd_values" {
 # -----------------------------
 # Step 3: Deploy SSD Helm Releases
 # -----------------------------
-resource "helm_release" "tf_ssd" {
+resource "helm_release" "opsmx_ssd" {
   for_each = toset(var.ingress_hosts)
 
   depends_on = [null_resource.clone_ssd_chart]
 
-  name       = "ssd-terraform"
-  namespace  = var.namespace
-  chart      = "/tmp/enterprise-ssd/charts/ssd"
-  values     = [data.local_file.ssd_values.content]
-  version    = var.git_branch
+  name      = "ssd-terraform"
+  namespace = var.namespace
+  chart     = "/tmp/enterprise-ssd/charts/ssd"
+  values    = [data.local_file.ssd_values.content]
+  version   = var.git_branch
+  
 
   set {
     name  = "ingress.enabled"
@@ -92,10 +93,10 @@ resource "helm_release" "tf_ssd" {
 
   set {
     name  = "global.ssdUI.host"
-    value = join(",", var.ingress_hosts)
+    value = join(",", var.ingress_hosts) 
   }
 
-  create_namespace = false
+  create_namespace = true
   force_update     = true
   recreate_pods    = true
   cleanup_on_fail  = true
