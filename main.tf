@@ -12,13 +12,12 @@ terraform {
   }
 }
 
-# 1. Namespace (Handled via the import command above)
+# 1. Namespace (Import if already exists)
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
   }
   lifecycle {
-    # This prevents the namespace from being accidentally deleted
     prevent_destroy = true
   }
 }
@@ -35,18 +34,25 @@ resource "terraform_data" "clone_ssd_chart" {
   }
 }
 
-# 3. Deploy / Upgrade SSD
+# 3. Safe File Reader
+# This data source will wait for the clone to finish before trying to read.
+data "local_file" "ssd_values" {
+  filename   = "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
+  depends_on = [terraform_data.clone_ssd_chart]
+}
+
+# 4. Deploy / Upgrade SSD
+
 resource "helm_release" "opsmx_ssd" {
-  # CRITICAL: Ensures cloning finishes before Helm tries to read the file
-  depends_on = [terraform_data.clone_ssd_chart, kubernetes_namespace.opmsx_ns]
+  depends_on = [kubernetes_namespace.opmsx_ns, terraform_data.clone_ssd_chart]
 
   name       = "ssd"
   namespace  = var.namespace
   chart      = "/tmp/enterprise-ssd/charts/ssd"
 
-  # We pass the actual file content to avoid "unmarshal" errors
+  # We use the content from the data source
   values = [
-    file("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml")
+    data.local_file.ssd_values.content
   ]
 
   version          = var.ssd_version
@@ -64,13 +70,9 @@ resource "helm_release" "opsmx_ssd" {
     name  = "global.ssdUI.host"
     value = join(",", var.ingress_hosts)
   }
-  set {
-    name  = "global.certManager.installed"
-    value = "true"
-  }
 }
 
-# 4. Apply Job YAML
+# 5. Apply Job YAML
 resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
   
