@@ -97,7 +97,7 @@ resource "helm_release" "opsmx_ssd" {
     value = join(",", var.ingress_hosts) 
   }
 
-  create_namespace = true
+  create_namespace = false
   force_update     = true
   recreate_pods    = true
   cleanup_on_fail  = true
