@@ -9,10 +9,6 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.23"
     }
-    local = {
-      source  = "hashicorp/local"
-      version = "~> 2.4"
-    }
   }
 }
 
@@ -30,7 +26,7 @@ provider "helm" {
 }
 
 # -----------------------------
-# Step 1: Namespace (Import if exists)
+# 1. Namespace
 # -----------------------------
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
@@ -42,7 +38,7 @@ resource "kubernetes_namespace" "opmsx_ns" {
 }
 
 # -----------------------------
-# Step 2: Clone SSD Helm Chart
+# 2. Clone SSD Helm Chart
 # -----------------------------
 resource "terraform_data" "clone_ssd_chart" {
   input = {
@@ -59,19 +55,20 @@ resource "terraform_data" "clone_ssd_chart" {
 }
 
 # -----------------------------
-# Step 3: Deploy / Upgrade SSD
+# 3. Deploy / Upgrade SSD
 # -----------------------------
 resource "helm_release" "opsmx_ssd" {
+  # This tells Terraform: Do not even look at this resource until the clone is done
   depends_on = [terraform_data.clone_ssd_chart, kubernetes_namespace.opmsx_ns]
 
   name       = "ssd"
   namespace  = var.namespace
   chart      = "/tmp/enterprise-ssd/charts/ssd"
   
-  # SOLUTION: We use a list for values. If the file doesn't exist yet, 
-  # we provide an empty string so the Plan doesn't crash.
+  # By using 'templatefile' inside the list, and since it depends on the clone,
+  # we avoid the "inconsistent plan" error.
   values = [
-    fileexists("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml") ? file("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml") : ""
+    templatefile("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml", {})
   ]
 
   version          = var.ssd_version
@@ -99,13 +96,12 @@ resource "helm_release" "opsmx_ssd" {
 }
 
 # -----------------------------
-# Step 4: Apply Job YAML
+# 4. Apply Job YAML
 # -----------------------------
 resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
 
   triggers_replace = [
-    # Fixed the function name to filebase64sha256
     filebase64sha256("${path.module}/job.yaml"),
     var.ssd_version
   ]
