@@ -22,7 +22,7 @@ provider "helm" {
   }
 }
 
-# 1. Namespace (Handled via import if it exists)
+# 1. Namespace
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
@@ -40,7 +40,7 @@ resource "helm_release" "opsmx_ssd" {
   namespace  = var.namespace
   chart      = "/tmp/enterprise-ssd/charts/ssd"
 
-  # Now we can safely use file() because our script ensures it exists
+  # Safely read the file because our script ensures it exists beforehand
   values = [
     file("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml")
   ]
@@ -70,6 +70,7 @@ resource "helm_release" "opsmx_ssd" {
 # 3. Apply Job YAML
 resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
+  
   triggers_replace = [
     filebase64sha256("${path.module}/job.yaml"),
     var.ssd_version
