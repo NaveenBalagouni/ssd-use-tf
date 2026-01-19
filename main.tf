@@ -49,20 +49,17 @@ resource "terraform_data" "clone_ssd_chart" {
 
 # 3. Deploy / Upgrade SSD
 resource "helm_release" "opsmx_ssd" {
-  # Explicitly wait for the clone to finish
   depends_on = [terraform_data.clone_ssd_chart, kubernetes_namespace.opmsx_ns]
 
   name       = "ssd"
   namespace  = var.namespace
-  
-  # We use the absolute path string. 
-  # Helm will look for this folder only when it starts the installation.
   chart      = "/tmp/enterprise-ssd/charts/ssd"
-  
-  # FIX: Pass the path as a string in the list. 
-  # DO NOT use file() or templatefile() here.
+
+  # FIX: Use file() but only if the file exists. 
+  # During the very first 'plan', it will be empty. 
+  # During 'apply', the clone runs first, then this becomes the full YAML content.
   values = [
-    "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
+    fileexists("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml") ? file("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml") : "# No values found yet"
   ]
 
   version          = var.ssd_version
@@ -73,6 +70,7 @@ resource "helm_release" "opsmx_ssd" {
   wait             = true
   timeout          = 900
 
+  # These 'set' commands override whatever is in the YAML file above
   set {
     name  = "ingress.enabled"
     value = "true"
@@ -94,7 +92,6 @@ resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
 
   triggers_replace = [
-    # Using path.module ensures this is checked during Plan safely
     filebase64sha256("${path.module}/job.yaml"),
     var.ssd_version
   ]
