@@ -30,14 +30,12 @@ provider "helm" {
 }
 
 # -----------------------------
-# Step 1: Namespace 
+# Step 1: Namespace (Import if exists)
 # -----------------------------
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
   }
-
-  # This prevents Terraform from deleting the namespace if the stack is destroyed
   lifecycle {
     prevent_destroy = true
   }
@@ -61,24 +59,20 @@ resource "terraform_data" "clone_ssd_chart" {
 }
 
 # -----------------------------
-# Step 3: Load Helm values.yaml
-# -----------------------------
-data "local_file" "ssd_values" {
-  filename   = "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
-  depends_on = [terraform_data.clone_ssd_chart]
-}
-
-# -----------------------------
-# Step 4: Deploy / Upgrade SSD
+# Step 3: Deploy / Upgrade SSD
 # -----------------------------
 resource "helm_release" "opsmx_ssd" {
-  name       = "ssd"
-  namespace  = kubernetes_namespace.opmsx_ns.metadata[0].name
-  chart      = "/tmp/enterprise-ssd/charts/ssd"
-  repository = null # Local chart
+  depends_on = [terraform_data.clone_ssd_chart, kubernetes_namespace.opmsx_ns]
 
-  # Use the loaded values file
-  values = [data.local_file.ssd_values.content]
+  name       = "ssd"
+  namespace  = var.namespace
+  chart      = "/tmp/enterprise-ssd/charts/ssd"
+  
+  # SOLUTION: We use a list for values. If the file doesn't exist yet, 
+  # we provide an empty string so the Plan doesn't crash.
+  values = [
+    fileexists("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml") ? file("/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml") : ""
+  ]
 
   version          = var.ssd_version
   create_namespace = false
@@ -102,20 +96,18 @@ resource "helm_release" "opsmx_ssd" {
     name  = "global.certManager.installed"
     value = "true"
   }
-
-  # Ensure the chart is cloned before Helm tries to install it
-  depends_on = [terraform_data.clone_ssd_chart]
 }
 
 # -----------------------------
-# Step 5: Apply Job YAML
+# Step 4: Apply Job YAML
 # -----------------------------
 resource "terraform_data" "apply_job_yaml" {
+  depends_on = [helm_release.opsmx_ssd]
+
   triggers_replace = [
-    # Re-run if the template file changes
-    hashicls(file("${path.module}/job.yaml")),
-    # Re-run if the Helm release is updated
-    helm_release.opsmx_ssd.version
+    # Fixed the function name to filebase64sha256
+    filebase64sha256("${path.module}/job.yaml"),
+    var.ssd_version
   ]
 
   provisioner "local-exec" {
@@ -125,6 +117,4 @@ resource "terraform_data" "apply_job_yaml" {
       EOF
     EOT
   }
-
-  depends_on = [helm_release.opsmx_ssd]
 }
