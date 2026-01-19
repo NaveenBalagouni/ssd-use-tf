@@ -12,8 +12,18 @@ terraform {
   }
 }
 
-# 1. Clone Chart Logic (Moved back to Terraform but isolated)
-resource "terraform_data" "clone_ssd" {
+# 1. Namespace (Import if already exists)
+resource "kubernetes_namespace" "opmsx_ns" {
+  metadata {
+    name = var.namespace
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# 2. Clone SSD Helm Chart
+resource "terraform_data" "clone_ssd_chart" {
   triggers_replace = [var.git_branch]
 
   provisioner "local-exec" {
@@ -24,29 +34,25 @@ resource "terraform_data" "clone_ssd" {
   }
 }
 
-# 2. Namespace (Import if already exists)
-resource "kubernetes_namespace" "opmsx_ns" {
-  metadata {
-    name = var.namespace
-  }
-  lifecycle {
-    prevent_destroy = true
-  }
+# 3. Read the values file ONLY after cloning
+# We use a data source here because it returns the 'content' specifically.
+data "local_file" "ssd_values_content" {
+  # This depends_on is the secret sauce
+  depends_on = [terraform_data.clone_ssd_chart]
+  filename   = "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
 }
 
-# 3. Deploy / Upgrade SSD
+# 4. Deploy / Upgrade SSD
 resource "helm_release" "opsmx_ssd" {
-  # This dependency is critical: Helm won't start until cloning is done
-  depends_on = [terraform_data.clone_ssd, kubernetes_namespace.opmsx_ns]
+  depends_on = [kubernetes_namespace.opmsx_ns]
 
   name       = "ssd"
   namespace  = var.namespace
   chart      = "/tmp/enterprise-ssd/charts/ssd"
 
-  # FIX: We pass the PATH as a string, not the file() function.
-  # The Helm provider will read the file during the Apply phase.
+  # We pass the content of the file, not the path string
   values = [
-    "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
+    data.local_file.ssd_values_content.content
   ]
 
   version          = var.ssd_version
@@ -71,7 +77,7 @@ resource "helm_release" "opsmx_ssd" {
   }
 }
 
-# 4. Apply Job YAML
+# 5. Apply Job YAML
 resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
   
