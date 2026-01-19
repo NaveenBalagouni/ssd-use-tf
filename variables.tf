@@ -10,6 +10,12 @@ variable "git_branch" {
   default     = "2025-01"
 }
 
+variable "ssd_version" {
+  description = "SSD Helm chart version to deploy or upgrade"
+  type        = string
+}
+
+
 variable "kubeconfig_path" {
   description = "Path to your kubeconfig file"
   type        = string
