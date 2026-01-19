@@ -7,7 +7,7 @@ variable "git_repo_url" {
 variable "git_branch" {
   description = "Git branch to clone (can be updated for upgrades)"
   type        = string
-  default     = "2025-01"
+  default     = "2025-05"
 }
 
 variable "kubeconfig_path" {
