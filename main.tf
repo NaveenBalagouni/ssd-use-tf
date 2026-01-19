@@ -12,7 +12,22 @@ terraform {
   }
 }
 
-# 1. Namespace (Import if already exists)
+# -----------------------------
+# Providers
+# -----------------------------
+provider "kubernetes" {
+  config_path = var.kubeconfig_path != "" ? var.kubeconfig_path : null
+}
+
+provider "helm" {
+  kubernetes {
+    config_path = var.kubeconfig_path != "" ? var.kubeconfig_path : null
+  }
+}
+
+# -----------------------------
+# Step 1: Namespace (Handled via import)
+# -----------------------------
 resource "kubernetes_namespace" "opmsx_ns" {
   metadata {
     name = var.namespace
@@ -22,7 +37,9 @@ resource "kubernetes_namespace" "opmsx_ns" {
   }
 }
 
-# 2. Clone SSD Helm Chart
+# -----------------------------
+# Step 2: Clone SSD Helm Chart
+# -----------------------------
 resource "terraform_data" "clone_ssd_chart" {
   triggers_replace = [var.git_branch]
 
@@ -34,26 +51,30 @@ resource "terraform_data" "clone_ssd_chart" {
   }
 }
 
-# 3. Safe File Reader
-# This data source will wait for the clone to finish before trying to read.
+# -----------------------------
+# Step 3: Read Values (Plan-Safe)
+# -----------------------------
+# This data source waits for the clone to finish before looking for the file
 data "local_file" "ssd_values" {
-  filename   = "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
   depends_on = [terraform_data.clone_ssd_chart]
+  filename   = "/tmp/enterprise-ssd/charts/ssd/ssd-minimal-values.yaml"
 }
 
-# 4. Deploy / Upgrade SSD
-
+# -----------------------------
+# Step 4: Deploy / Upgrade SSD
+# -----------------------------
 resource "helm_release" "opsmx_ssd" {
-  depends_on = [kubernetes_namespace.opmsx_ns, terraform_data.clone_ssd_chart]
+  depends_on = [
+    kubernetes_namespace.opmsx_ns,
+    terraform_data.clone_ssd_chart
+  ]
 
   name       = "ssd"
   namespace  = var.namespace
   chart      = "/tmp/enterprise-ssd/charts/ssd"
-
-  # We use the content from the data source
-  values = [
-    data.local_file.ssd_values.content
-  ]
+  
+  # Pass the ACTUAL CONTENT from the data source to avoid JSON errors
+  values = [data.local_file.ssd_values.content]
 
   version          = var.ssd_version
   force_update     = true
@@ -66,16 +87,19 @@ resource "helm_release" "opsmx_ssd" {
     name  = "ingress.enabled"
     value = "true"
   }
+
   set {
     name  = "global.ssdUI.host"
     value = join(",", var.ingress_hosts)
   }
 }
 
-# 5. Apply Job YAML
+# -----------------------------
+# Step 5: Apply Job YAML
+# -----------------------------
 resource "terraform_data" "apply_job_yaml" {
   depends_on = [helm_release.opsmx_ssd]
-  
+
   triggers_replace = [
     filebase64sha256("${path.module}/job.yaml"),
     var.ssd_version
